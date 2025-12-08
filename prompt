@@ -1,0 +1,17 @@
+we have to make a simple application with morderen professional ui, it should take 2 files as input like the files attached,
+
+context:
+so the company has multiple vendors we have to find total invoice for each
+
+
+strcuture:
+1) sheet 1 (universal database): this has 3 columns: supplier, default pay, invoice total. your goal as the agent is to make code for taking content from "The Maxwell hotel" sheet. 
+and filling up the column for invoice tool in (universal database).
+2) sheet 2 (The Maxwell hotel): the columns are Vendor,	Invoice Amount. 
+
+process:
+1) first take "The Maxwell hotel", for a vendor id there will be a small table made with vendor name
+2) match the vendor name with the supplier name in the universal database
+   a) exact match: if there is an exact match 
+   b) if there is no exact match do fuzzy matching
+3) now when the matching is done in the col for Invoice Amount there will be a subsum total given for that vendor take that ammount and add it to the invoice total col in sheet 1

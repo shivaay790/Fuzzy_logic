@@ -1,6 +1,8 @@
 import base64
 import io
 import re
+import sys
+import traceback
 from typing import List, Optional, Tuple
 
 import pandas as pd
@@ -253,9 +255,6 @@ async def process_files(
     universal_sheet: Optional[str] = Form(None),
     vendor_sheet: Optional[str] = Form(None),
 ):
-    import sys
-    import traceback
-    
     try:
         print(f"[DEBUG] Received files: {universal_file.filename}, {vendor_file.filename}", file=sys.stderr)
         

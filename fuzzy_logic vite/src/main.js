@@ -132,8 +132,33 @@ async function processFiles() {
     })
 
     if (!res.ok) {
-      const errText = await res.text()
-      throw new Error(errText || 'Request failed')
+      let errorMessage = `Server error: ${res.status} ${res.statusText}`
+      try {
+        const errorData = await res.json()
+        errorMessage = errorData.detail || errorData.message || errorMessage
+      } catch (e) {
+        // If response isn't JSON, try text
+        try {
+          const errorText = await res.text()
+          if (errorText) {
+            // Try to parse as JSON
+            try {
+              const parsed = JSON.parse(errorText)
+              errorMessage = parsed.detail || parsed.message || errorText
+            } catch {
+              errorMessage = errorText || errorMessage
+            }
+          }
+        } catch (e2) {
+          console.error('Failed to read error response:', e2)
+        }
+      }
+      console.error('API Error:', {
+        status: res.status,
+        statusText: res.statusText,
+        message: errorMessage
+      })
+      throw new Error(errorMessage)
     }
 
     const data = await res.json()

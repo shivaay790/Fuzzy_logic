@@ -215,7 +215,34 @@ app.add_middleware(
 @app.get("/api/health")
 @app.get("/health")  # Also support without /api for local development
 async def health():
-    return {"status": "ok"}
+    import sys
+    import pandas as pd
+    return {
+        "status": "ok",
+        "pandas_version": pd.__version__,
+        "openpyxl_available": True
+    }
+
+@app.get("/api/test")
+async def test():
+    """Test endpoint to verify API and dependencies are working"""
+    import sys
+    import pandas as pd
+    try:
+        import openpyxl
+        openpyxl_available = True
+        openpyxl_version = openpyxl.__version__
+    except ImportError:
+        openpyxl_available = False
+        openpyxl_version = None
+    
+    return {
+        "status": "ok",
+        "message": "API is working",
+        "pandas_version": pd.__version__,
+        "openpyxl_available": openpyxl_available,
+        "openpyxl_version": openpyxl_version
+    }
 
 
 @app.post("/api/process")
@@ -226,29 +253,78 @@ async def process_files(
     universal_sheet: Optional[str] = Form(None),
     vendor_sheet: Optional[str] = Form(None),
 ):
+    import sys
+    import traceback
+    
     try:
+        print(f"[DEBUG] Received files: {universal_file.filename}, {vendor_file.filename}", file=sys.stderr)
+        
         universal_bytes = await universal_file.read()
         vendor_bytes = await vendor_file.read()
+        
+        print(f"[DEBUG] File sizes: universal={len(universal_bytes)} bytes, vendor={len(vendor_bytes)} bytes", file=sys.stderr)
 
-        universal_df = load_spreadsheet_bytes(universal_bytes, universal_file.filename, sheet_name=universal_sheet)
-        vendor_df = load_spreadsheet_bytes(vendor_bytes, vendor_file.filename, sheet_name=vendor_sheet)
+        # Validate file sizes (10MB limit)
+        MAX_SIZE = 10 * 1024 * 1024
+        if len(universal_bytes) > MAX_SIZE:
+            raise HTTPException(status_code=413, detail=f"Universal file too large: {len(universal_bytes)} bytes (max {MAX_SIZE})")
+        if len(vendor_bytes) > MAX_SIZE:
+            raise HTTPException(status_code=413, detail=f"Vendor file too large: {len(vendor_bytes)} bytes (max {MAX_SIZE})")
 
-        updated_df, matches_df, unmatched_df = process_matches(universal_df, vendor_df)
+        print("[DEBUG] Loading spreadsheets...", file=sys.stderr)
+        try:
+            universal_df = load_spreadsheet_bytes(universal_bytes, universal_file.filename, sheet_name=universal_sheet)
+            vendor_df = load_spreadsheet_bytes(vendor_bytes, vendor_file.filename, sheet_name=vendor_sheet)
+        except Exception as e:
+            print(f"[ERROR] Failed to load spreadsheets: {str(e)}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            raise HTTPException(status_code=400, detail=f"Failed to read files: {str(e)}")
+        
+        print(f"[DEBUG] DataFrames loaded: universal={len(universal_df)} rows, vendor={len(vendor_df)} rows", file=sys.stderr)
+        print(f"[DEBUG] Universal columns: {list(universal_df.columns)}", file=sys.stderr)
+        print(f"[DEBUG] Vendor columns: {list(vendor_df.columns)}", file=sys.stderr)
+
+        print("[DEBUG] Processing matches...", file=sys.stderr)
+        try:
+            updated_df, matches_df, unmatched_df = process_matches(universal_df, vendor_df)
+        except Exception as e:
+            print(f"[ERROR] Failed to process matches: {str(e)}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            raise HTTPException(status_code=400, detail=f"Processing error: {str(e)}")
+        
+        print(f"[DEBUG] Processing complete: {len(matches_df)} matches, {len(unmatched_df)} unmatched", file=sys.stderr)
+
+        print("[DEBUG] Creating Excel file...", file=sys.stderr)
+        try:
+            excel_b64 = df_to_base64_excel(updated_df, sheet_name=universal_sheet or "Universal Database")
+        except Exception as e:
+            print(f"[ERROR] Failed to create Excel: {str(e)}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            raise HTTPException(status_code=500, detail=f"Failed to create output file: {str(e)}")
 
         response = {
-            "updated_universal_excel_b64": df_to_base64_excel(updated_df, sheet_name=universal_sheet or "Universal Database"),
+            "updated_universal_excel_b64": excel_b64,
             "updated_universal_filename": "updated_universal_database.xlsx",
             "matches": matches_df.to_dict(orient="records"),
             "unmatched": unmatched_df.to_dict(orient="records"),
         }
 
         if not unmatched_df.empty:
-            response["unmatched_csv_b64"] = df_to_base64_csv(unmatched_df)
-            response["unmatched_filename"] = "unmatched_vendors.csv"
+            try:
+                response["unmatched_csv_b64"] = df_to_base64_csv(unmatched_df)
+                response["unmatched_filename"] = "unmatched_vendors.csv"
+            except Exception as e:
+                print(f"[WARN] Failed to create CSV: {str(e)}", file=sys.stderr)
 
+        print("[DEBUG] Returning response", file=sys.stderr)
         return JSONResponse(content=response)
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        error_trace = traceback.format_exc()
+        print(f"[ERROR] Unexpected error in process_files: {str(exc)}", file=sys.stderr)
+        print(error_trace, file=sys.stderr)
+        raise HTTPException(status_code=500, detail=f"Server error: {str(exc)}")
 
 
 if __name__ == "__main__":

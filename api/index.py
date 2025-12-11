@@ -12,11 +12,9 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-# Import and setup
 from mangum import Mangum
 from app import app
 
-# Mangum is an ASGI adapter that allows FastAPI to run on AWS Lambda/Vercel
-# Note: strip_base_path is not available in this Mangum version
-# Instead, we handle the /api prefix in FastAPI routes or via middleware
+# Export the Mangum handler directly
+# Vercel's Python runtime should detect this as an ASGI application
 handler = Mangum(app, lifespan="off")

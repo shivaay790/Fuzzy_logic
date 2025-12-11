@@ -1,5 +1,5 @@
 fastapi>=0.104.0
-uvicorn
+uvicorn[standard]
 python-multipart
 numpy>=1.24.0
 pandas>=2.0.0

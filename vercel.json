@@ -1,5 +1,7 @@
 {
   "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "fuzzy_logic vite/dist",
   "builds": [
     {
       "src": "package.json",
@@ -9,17 +11,14 @@
       }
     },
     {
-      "src": "api/index.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxLambdaSize": "50mb"
-      }
+      "src": "api/index.js",
+      "use": "@vercel/node"
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "/api/index.py"
+      "dest": "/api/index.js"
     },
     {
       "src": "/(.*\\.(js|css|ico|png|jpg|jpeg|svg|woff|woff2|ttf|eot|json))",
@@ -30,7 +29,8 @@
     },
     {
       "src": "/(.*)",
-      "dest": "/fuzzy_logic vite/dist/index.html"
+      "dest": "/fuzzy_logic vite/dist/index.html",
+      "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     }
   ]
 }

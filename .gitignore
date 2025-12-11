@@ -52,3 +52,8 @@ Thumbs.db
 .env
 .env.local
 
+# Node / frontend
+node_modules/
+dist/
+*.local
+

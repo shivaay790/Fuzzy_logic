@@ -1,9 +1,12 @@
+import base64
 import io
 import re
 from typing import List, Optional, Tuple
 
 import pandas as pd
-import streamlit as st
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from rapidfuzz import fuzz, process
 
 SIMILARITY_THRESHOLD = 85  # balanced default: tolerant of minor spelling/order changes
@@ -12,7 +15,8 @@ SIMILARITY_THRESHOLD = 85  # balanced default: tolerant of minor spelling/order 
 def normalize_name(value: str) -> str:
     """Normalize supplier/vendor names for comparison."""
     text = str(value).strip().lower()
-    text = re.sub(r"[-_]+", " ", text)
+    text = re.sub(r"[-_]+", " ", text)  # treat hyphen/underscore as space
+    text = re.sub(r"[^\w\s]", " ", text)  # drop punctuation (e.g., commas, periods)
     return " ".join(text.split())
 
 
@@ -37,21 +41,13 @@ def parse_amount(value) -> Optional[float]:
         return None
 
 
-def load_spreadsheet(uploaded_file, sheet_name: Optional[str] = None) -> pd.DataFrame:
-    """Read CSV or Excel into a DataFrame."""
-    name = uploaded_file.name.lower()
+def load_spreadsheet_bytes(data: bytes, filename: str, sheet_name: Optional[str] = None) -> pd.DataFrame:
+    """Read CSV or Excel from bytes into a DataFrame."""
+    name = filename.lower()
+    buffer = io.BytesIO(data)
     if name.endswith(".csv"):
-        return pd.read_csv(uploaded_file)
-    return pd.read_excel(uploaded_file, sheet_name=sheet_name if sheet_name is not None else 0)
-
-
-def get_sheet_names(uploaded_file) -> List[str]:
-    """Return sheet names for an Excel file; empty for CSV."""
-    name = uploaded_file.name.lower()
-    if name.endswith(".csv"):
-        return []
-    xls = pd.ExcelFile(uploaded_file)
-    return list(xls.sheet_names)
+        return pd.read_csv(buffer)
+    return pd.read_excel(buffer, sheet_name=sheet_name if sheet_name is not None else 0)
 
 
 def process_matches(
@@ -195,99 +191,66 @@ def to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Universal Database") -> 
     return buffer.getvalue()
 
 
-def main():
-    st.set_page_config(page_title="Vendor Invoice Matcher", page_icon="📄", layout="centered")
-    st.title("Vendor Invoice Matcher")
-    st.caption("Upload the Universal Database and a vendor invoice sheet to update totals.")
+def df_to_base64_excel(df: pd.DataFrame, sheet_name: str = "Universal Database") -> str:
+    data = to_excel_bytes(df, sheet_name)
+    return base64.b64encode(data).decode("utf-8")
 
-    st.markdown(
-        """
-        1. Upload the Universal Database (CSV or Excel).
-        2. Upload the vendor-specific sheet (CSV or Excel).
-        3. Click **Process** to update invoice totals.
-        """
-    )
 
-    col1, col2 = st.columns(2)
-    universal_file = col1.file_uploader("Universal Database (Sheet 1)", type=["csv", "xls", "xlsx"])
-    vendor_file = col2.file_uploader("Vendor Invoice Sheet", type=["csv", "xls", "xlsx"])
+def df_to_base64_csv(df: pd.DataFrame) -> str:
+    data = df.to_csv(index=False).encode("utf-8")
+    return base64.b64encode(data).decode("utf-8")
 
-    if universal_file:
-        universal_sheet_options = get_sheet_names(universal_file)
-        universal_sheet = None
-        if universal_sheet_options:
-            universal_sheet = st.selectbox(
-                "Select Universal Database sheet",
-                universal_sheet_options,
-                index=0,
-                key="universal_sheet",
-            )
-    else:
-        universal_sheet = None
 
-    if vendor_file:
-        vendor_sheet_options = get_sheet_names(vendor_file)
-        vendor_sheet = None
-        if vendor_sheet_options:
-            vendor_sheet = st.selectbox(
-                "Select Vendor sheet",
-                vendor_sheet_options,
-                index=0,
-                key="vendor_sheet",
-            )
-    else:
-        vendor_sheet = None
+app = FastAPI(title="Vendor Invoice Matcher API")
 
-    process_btn = st.button("Process", type="primary", use_container_width=True)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # adjust to specific origins in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    if process_btn:
-        if not universal_file or not vendor_file:
-            st.error("Please upload both files before processing.")
-            return
 
-        try:
-            universal_df = load_spreadsheet(universal_file, sheet_name=universal_sheet)
-            vendor_df = load_spreadsheet(vendor_file, sheet_name=vendor_sheet)
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
-            updated_df, matches_df, unmatched_df = process_matches(universal_df, vendor_df)
 
-            st.success("Processing complete. Download the updated Universal Database below.")
+@app.post("/process")
+async def process_files(
+    universal_file: UploadFile = File(...),
+    vendor_file: UploadFile = File(...),
+    universal_sheet: Optional[str] = Form(None),
+    vendor_sheet: Optional[str] = Form(None),
+):
+    try:
+        universal_bytes = await universal_file.read()
+        vendor_bytes = await vendor_file.read()
 
-            # Download buttons
-            excel_bytes = to_excel_bytes(updated_df, sheet_name=universal_sheet or "Universal Database")
-            st.download_button(
-                label="Download Updated Universal Database (Excel)",
-                data=excel_bytes,
-                file_name="updated_universal_database.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
+        universal_df = load_spreadsheet_bytes(universal_bytes, universal_file.filename, sheet_name=universal_sheet)
+        vendor_df = load_spreadsheet_bytes(vendor_bytes, vendor_file.filename, sheet_name=vendor_sheet)
 
-            if not unmatched_df.empty:
-                unmatched_csv = unmatched_df.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    label="Download Unmatched Vendors Log (CSV)",
-                    data=unmatched_csv,
-                    file_name="unmatched_vendors.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
+        updated_df, matches_df, unmatched_df = process_matches(universal_df, vendor_df)
 
-            # Optional details
-            with st.expander("Match summary"):
-                st.write(f"Exact/Fuzzy matches: {len(matches_df)}")
-                st.write(f"Unmatched vendors: {len(unmatched_df)}")
-                if not matches_df.empty:
-                    st.dataframe(matches_df)
-                if not unmatched_df.empty:
-                    st.dataframe(unmatched_df)
+        response = {
+            "updated_universal_excel_b64": df_to_base64_excel(updated_df, sheet_name=universal_sheet or "Universal Database"),
+            "updated_universal_filename": "updated_universal_database.xlsx",
+            "matches": matches_df.to_dict(orient="records"),
+            "unmatched": unmatched_df.to_dict(orient="records"),
+        }
 
-            st.subheader("Updated Universal Database preview")
-            st.dataframe(updated_df)
-        except Exception as exc:  # pragma: no cover - guarded UI path
-            st.error(f"An error occurred: {exc}")
+        if not unmatched_df.empty:
+            response["unmatched_csv_b64"] = df_to_base64_csv(unmatched_df)
+            response["unmatched_filename"] = "unmatched_vendors.csv"
+
+        return JSONResponse(content=response)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
 

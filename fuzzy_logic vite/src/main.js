@@ -1,6 +1,7 @@
 import './style.css'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+// Use /api prefix for Vercel deployment, or localhost for development
+const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:8000' : '/api')
 
 const app = document.querySelector('#app')
 

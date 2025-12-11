@@ -1,6 +1,6 @@
 """
 Vercel serverless function entry point for the FastAPI application.
-Expose the FastAPI ASGI app directly; Vercel automatically wraps ASGI apps.
+Using Mangum with a function handler to avoid Vercel's handler detection issues.
 """
 import sys
 import os
@@ -15,14 +15,25 @@ if parent_dir not in sys.path:
 try:
     from app import app as fastapi_app
 except ImportError as e:
-    # Fallback for debugging
     import traceback
-    print(f"Import error: {e}")
-    traceback.print_exc()
+    print(f"Import error: {e}", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
     raise
 
-# Export FastAPI ASGI app directly; Vercel will wrap it natively
-handler = fastapi_app
-# Optional: also expose as `app` for ASGI autodetection
-app = fastapi_app
+# Import Mangum at module level
+from mangum import Mangum
 
+# Create Mangum adapter instance
+asgi_adapter = Mangum(fastapi_app, lifespan="off")
+
+# Export as a function handler - this avoids the issubclass check
+# Vercel expects a callable function, not a class instance
+def handler(event, context):
+    """
+    AWS Lambda-style handler function.
+    This function format avoids Vercel's problematic issubclass check.
+    """
+    return asgi_adapter(event, context)
+
+# Also export the app for ASGI autodetection (fallback)
+app = fastapi_app

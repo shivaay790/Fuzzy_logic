@@ -212,12 +212,14 @@ app.add_middleware(
 )
 
 
-@app.get("/health")
+@app.get("/api/health")
+@app.get("/health")  # Also support without /api for local development
 async def health():
     return {"status": "ok"}
 
 
-@app.post("/process")
+@app.post("/api/process")
+@app.post("/process")  # Also support without /api for local development
 async def process_files(
     universal_file: UploadFile = File(...),
     vendor_file: UploadFile = File(...),

@@ -1,0 +1,8 @@
+{
+  "name": "fuzzy-match-app",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "cd \"fuzzy_logic vite\" && npm install && npm run build"
+  }
+}
+

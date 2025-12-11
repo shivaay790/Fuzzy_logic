@@ -21,10 +21,8 @@ except ImportError as e:
     traceback.print_exc()
     raise
 
-# Vercel detects ASGI apps when exported as `app`
-# The path that reaches FastAPI will include /api prefix
-app = fastapi_app
-
-# Alias for environments that look for `handler`
+# Export FastAPI ASGI app directly; Vercel will wrap it natively
 handler = fastapi_app
+# Optional: also expose as `app` for ASGI autodetection
+app = fastapi_app
 

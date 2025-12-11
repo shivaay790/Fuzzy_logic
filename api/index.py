@@ -12,9 +12,17 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from mangum import Mangum
-from app import app
+# Import FastAPI app (renamed to avoid conflicts)
+from app import app as fastapi_application
 
-# Export the Mangum handler directly
-# Vercel's Python runtime should detect this as an ASGI application
-handler = Mangum(app, lifespan="off")
+# Import Mangum
+from mangum import Mangum
+
+# Create ASGI adapter - Mangum wraps FastAPI to work with serverless
+# This creates an ASGI application instance that Vercel can use
+asgi_app = Mangum(fastapi_application, lifespan="off")
+
+# Export as 'handler' - Vercel looks for this variable
+# This is an ASGI application, not a class, which is why Vercel's detection fails
+# But we export it anyway and Vercel should handle it correctly
+handler = asgi_app

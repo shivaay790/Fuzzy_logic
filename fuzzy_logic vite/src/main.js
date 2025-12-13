@@ -1,7 +1,7 @@
 import './style.css'
 
 // Use /api prefix for Vercel deployment, or localhost for development
-const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:8000' : '/api')
+const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:8000/api' : '/api')
 
 const app = document.querySelector('#app')
 
@@ -32,6 +32,23 @@ app.innerHTML = `
         <label>Vendor sheet name (optional)</label>
         <input type="text" id="vendorSheet" placeholder="e.g. The Maxwell Hotel" />
       </div>
+      <div class="field">
+        <label>Matching Method</label>
+        <select id="matchingMethod" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+          <option value="fuzzy">Fuzzy Logic (Fuse.js) - Fast & Accurate</option>
+          <option value="llm">LLM (Gemini AI) - Intelligent Matching</option>
+        </select>
+        <small style="display: block; margin-top: 0.25rem; color: #666; font-size: 0.875rem;">
+          Choose between fuzzy string matching or AI-powered matching
+        </small>
+      </div>
+      <div class="field">
+        <label>Similarity Threshold (0-100)</label>
+        <input type="number" id="similarityThreshold" min="0" max="100" value="85" />
+        <small style="display: block; margin-top: 0.25rem; color: #666; font-size: 0.875rem;">
+          Higher values = stricter matching (default: 85). Lower values = more lenient matching.
+        </small>
+      </div>
       <div class="actions">
         <button id="processBtn">Process</button>
       </div>
@@ -45,17 +62,10 @@ app.innerHTML = `
     <section class="card results" id="results" hidden>
       <div class="result-block">
         <div class="result-header">
-          <h2>Matches</h2>
-          <span id="matchCount" class="pill">0</span>
+          <h2>All Vendor Matches</h2>
+          <span id="allMatchesCount" class="pill">0</span>
         </div>
-        <div class="table-wrap" id="matchesTable"></div>
-      </div>
-      <div class="result-block">
-        <div class="result-header">
-          <h2>Unmatched Vendors</h2>
-          <span id="unmatchedCount" class="pill pill-warn">0</span>
-        </div>
-        <div class="table-wrap" id="unmatchedTable"></div>
+        <div class="table-wrap" id="allMatchesTable"></div>
       </div>
     </section>
   </div>
@@ -64,10 +74,8 @@ app.innerHTML = `
 const statusEl = document.getElementById('status')
 const downloadsEl = document.getElementById('downloads')
 const resultsEl = document.getElementById('results')
-const matchesTable = document.getElementById('matchesTable')
-const unmatchedTable = document.getElementById('unmatchedTable')
-const matchCount = document.getElementById('matchCount')
-const unmatchedCount = document.getElementById('unmatchedCount')
+const allMatchesTable = document.getElementById('allMatchesTable')
+const allMatchesCount = document.getElementById('allMatchesCount')
 
 function setStatus(message, tone = 'info') {
   statusEl.textContent = message
@@ -82,17 +90,22 @@ function base64ToBlob(base64, mime) {
   return new Blob([out], { type: mime })
 }
 
-function renderTable(target, rows, columns) {
+function renderTable(target, rows, columns, showNumbers = false) {
   if (!rows || rows.length === 0) {
     target.innerHTML = '<p class="muted">No rows</p>'
     return
   }
 
-  const header = columns.map((c) => `<th>${c.label}</th>`).join('')
+  const headerCells = showNumbers 
+    ? ['<th>#</th>', ...columns.map((c) => `<th>${c.label}</th>`)]
+    : columns.map((c) => `<th>${c.label}</th>`)
+  const header = headerCells.join('')
+  
   const body = rows
-    .map((row) => {
+    .map((row, index) => {
+      const numberCell = showNumbers ? `<td>${index + 1}</td>` : ''
       const tds = columns.map((c) => `<td>${row[c.key] ?? ''}</td>`).join('')
-      return `<tr>${tds}</tr>`
+      return `<tr>${numberCell}${tds}</tr>`
     })
     .join('')
 
@@ -109,13 +122,23 @@ async function processFiles() {
   const vendorFile = document.getElementById('vendorFile').files[0]
   const universalSheet = document.getElementById('universalSheet').value.trim()
   const vendorSheet = document.getElementById('vendorSheet').value.trim()
+  const similarityThreshold = document.getElementById('similarityThreshold').value
+  const matchingMethod = document.getElementById('matchingMethod').value
 
   if (!universalFile || !vendorFile) {
     setStatus('Please select both files.', 'warn')
     return
   }
 
-  setStatus('Uploading and processing...', 'info')
+  // Validate threshold
+  const threshold = parseFloat(similarityThreshold)
+  if (isNaN(threshold) || threshold < 0 || threshold > 100) {
+    setStatus('Similarity threshold must be a number between 0 and 100.', 'warn')
+    return
+  }
+
+  const methodName = matchingMethod === 'llm' ? 'Gemini AI' : 'Fuzzy Logic'
+  setStatus(`Uploading and processing with ${methodName}...`, 'info')
   downloadsEl.innerHTML = ''
   resultsEl.hidden = true
 
@@ -124,6 +147,8 @@ async function processFiles() {
   formData.append('vendor_file', vendorFile)
   if (universalSheet) formData.append('universal_sheet', universalSheet)
   if (vendorSheet) formData.append('vendor_sheet', vendorSheet)
+  formData.append('similarity_threshold', similarityThreshold)
+  formData.append('method', matchingMethod) // 'fuzzy' or 'llm'
 
   try {
     const res = await fetch(`${API_BASE}/process`, {
@@ -164,6 +189,10 @@ async function processFiles() {
     }
 
     const data = await res.json()
+    
+    console.log('[DEBUG] Received data:', {
+      all_matches: data.all_matches?.length || 0
+    })
 
     // Downloads
     const links = []
@@ -177,37 +206,32 @@ async function processFiles() {
       a.className = 'button link'
       links.push(a)
     }
-    if (data.unmatched_csv_b64) {
-      const blob = base64ToBlob(data.unmatched_csv_b64, 'text/csv')
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = data.unmatched_filename || 'unmatched_vendors.csv'
-      a.textContent = 'Download unmatched vendors log'
-      a.className = 'button ghost'
-      links.push(a)
-    }
     downloadsEl.innerHTML = ''
     links.forEach((el) => downloadsEl.appendChild(el))
 
     // Tables
-    const matches = data.matches || []
-    const unmatched = data.unmatched || []
-    matchCount.textContent = matches.length
-    unmatchedCount.textContent = unmatched.length
+    // All matches (individual vendor entries matched to closest suppliers)
+    const allMatches = (data.all_matches || []).sort((a, b) => {
+      // Exact matches first
+      if (a.match_type === 'exact' && b.match_type !== 'exact') return -1
+      if (a.match_type !== 'exact' && b.match_type === 'exact') return 1
+      
+      // Then sort by score descending
+      const scoreA = a.score || 0
+      const scoreB = b.score || 0
+      return scoreB - scoreA
+    })
+    
+    // Count all matches (including no_match entries)
+    allMatchesCount.textContent = allMatches.length
 
-    renderTable(matchesTable, matches, [
+    // Render all matches table with numbering - sorted by score 100 to 0
+    renderTable(allMatchesTable, allMatches, [
       { key: 'vendor', label: 'Vendor' },
       { key: 'supplier', label: 'Supplier' },
       { key: 'match_type', label: 'Type' },
       { key: 'score', label: 'Score' },
-      { key: 'amount_added', label: 'Amount Added' },
-    ])
-
-    renderTable(unmatchedTable, unmatched, [
-      { key: 'vendor', label: 'Vendor' },
-      { key: 'amount', label: 'Amount' },
-    ])
+    ], true)
 
     resultsEl.hidden = false
     setStatus('Done. Files ready to download.', 'success')
